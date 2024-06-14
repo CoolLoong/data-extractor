@@ -5,6 +5,7 @@ package org.jukeboxmc.extractor.util
 
 import com.google.gson.annotations.SerializedName
 import org.cloudburstmc.protocol.bedrock.data.inventory.ItemData
+import org.cloudburstmc.protocol.bedrock.data.inventory.crafting.RecipeUnlockingRequirement
 import org.cloudburstmc.protocol.bedrock.data.inventory.crafting.recipe.*
 import org.cloudburstmc.protocol.bedrock.data.inventory.descriptor.*
 import org.cloudburstmc.protocol.bedrock.packet.CraftingDataPacket
@@ -53,10 +54,15 @@ class RecipeUtil {
 
                 var priority: Int? = null
                 var output: Any? = null
+                var requirement: RecipeRequirement? = null
 
                 if (recipe is CraftingRecipeData) {
                     id = recipe.id
                     priority = recipe.priority
+                    requirement = RecipeRequirement(
+                        recipe.requirement.context,
+                        writeRecipeItemDescriptors(recipe.requirement.ingredients, dataExtractor)
+                    )
                     output = this.writeRecipeItems(recipe.results.toTypedArray())
                 }
 
@@ -65,11 +71,13 @@ class RecipeUtil {
                 var width: Int? = null
                 var height: Int? = null
 
+                var assumeSymetry: Boolean? = null
                 if (recipe is ShapedRecipeData) {
                     width = recipe.width
                     height = recipe.height
                     uuid = recipe.uuid
                     netId = recipe.netId
+                    assumeSymetry = recipe.isAssumeSymetry
 
                     var charCounter = 0
 
@@ -132,7 +140,7 @@ class RecipeUtil {
                         damage = null
                     }
 
-                    input = RecipeItem(dataExtractor.legacyItemIds()[recipe.inputId]!!, null, damage, null)
+                    input = RecipeItem(dataExtractor.legacyItemIds()[recipe.inputId]!!, null, damage, null, null)
                     output = this.itemFromNetwork(recipe.result)
                 }
 
@@ -154,7 +162,27 @@ class RecipeUtil {
                     template = this.fromNetwork(recipe.template, dataExtractor)
                 }
 
-                craftingData.add(CraftingDataEntry(id, type, input, output, entryShape, block, uuid, netId, priority, base, addition, template, result, width, height))
+                craftingData.add(
+                    CraftingDataEntry(
+                        id,
+                        type,
+                        input,
+                        output,
+                        entryShape,
+                        block,
+                        uuid,
+                        netId,
+                        priority,
+                        base,
+                        addition,
+                        template,
+                        result,
+                        width,
+                        height,
+                        requirement,
+                        assumeSymetry
+                    )
+                )
             }
 
             for (potionMix in packet.potionMixData) {
@@ -171,12 +199,26 @@ class RecipeUtil {
             }
 
             for (containerMix in packet.containerMixData) {
-                containerMixes.add(ContainerMixDataEntry(dataExtractor.legacyItemIds()[containerMix.inputId]!!, dataExtractor.legacyItemIds()[containerMix.reagentId]!!, dataExtractor.legacyItemIds()[containerMix.outputId]!!))
+                containerMixes.add(
+                    ContainerMixDataEntry(
+                        dataExtractor.legacyItemIds()[containerMix.inputId]!!,
+                        dataExtractor.legacyItemIds()[containerMix.reagentId]!!,
+                        dataExtractor.legacyItemIds()[containerMix.outputId]!!
+                    )
+                )
             }
 
             ExtractionUtil.writeJson(
-                dataExtractor.gson().toJson(Recipes(dataExtractor.codec().protocolVersion, craftingData, potionMixes, containerMixes)),
-                File("src/main/resources/extracted/recipes/recipes.${dataExtractor.codec().minecraftVersion.replace(".", "_")}.json")
+                dataExtractor.gson()
+                    .toJson(Recipes(dataExtractor.codec().protocolVersion, craftingData, potionMixes, containerMixes)),
+                File(
+                    "src/main/resources/extracted/recipes/recipes.${
+                        dataExtractor.codec().minecraftVersion.replace(
+                            ".",
+                            "_"
+                        )
+                    }.json"
+                )
             )
         }
 
@@ -194,7 +236,10 @@ class RecipeUtil {
             return outputs
         }
 
-        private fun writeRecipeItemDescriptors(inputs: List<ItemDescriptorWithCount>, dataExtractor: DataExtractor): List<RecipeItemDescriptor> {
+        private fun writeRecipeItemDescriptors(
+            inputs: List<ItemDescriptorWithCount>,
+            dataExtractor: DataExtractor
+        ): List<RecipeItemDescriptor> {
             val outputs = ArrayList<RecipeItemDescriptor>()
 
             for (input in inputs) {
@@ -211,8 +256,13 @@ class RecipeUtil {
         private fun itemFromNetwork(itemData: ItemData): RecipeItem {
             val id = itemData.definition.identifier
             val count = itemData.count
+            var blockHash: Int? = null;
             var damage: Int? = itemData.damage
             var tag: String? = null
+
+            if (itemData.blockDefinition?.runtimeId != 0) {
+                blockHash = itemData.blockDefinition?.runtimeId
+            }
 
             if (itemData.tag != null) {
                 tag = ExtractionUtil.nbtToBase64(itemData.tag!!)
@@ -222,10 +272,13 @@ class RecipeUtil {
                 damage = null
             }
 
-            return RecipeItem(id, count, damage, tag)
+            return RecipeItem(id, count, damage, blockHash, tag)
         }
 
-        private fun fromNetwork(descriptorWithCount: ItemDescriptorWithCount, dataExtractor: DataExtractor): RecipeItemDescriptor {
+        private fun fromNetwork(
+            descriptorWithCount: ItemDescriptorWithCount,
+            dataExtractor: DataExtractor
+        ): RecipeItemDescriptor {
             val itemDescriptor = descriptorWithCount.descriptor
 
             var name: String? = null
@@ -260,11 +313,26 @@ class RecipeUtil {
                 }
             }
 
-            return RecipeItemDescriptor(descriptorWithCount.descriptor.type.name.lowercase(), descriptorWithCount.count, name, dataExtractor.legacyItemIds()[itemId], auxValue, fullName, itemTag, tagExpression, molangVersion)
+            return RecipeItemDescriptor(
+                descriptorWithCount.descriptor.type.name.lowercase(),
+                descriptorWithCount.count,
+                name,
+                dataExtractor.legacyItemIds()[itemId],
+                auxValue,
+                fullName,
+                itemTag,
+                tagExpression,
+                molangVersion
+            )
         }
     }
 
-    data class Recipes(val version: Int, val recipes: List<CraftingDataEntry>, val potionMixes: List<PotionMixDataEntry>, val containerMixes: List<ContainerMixDataEntry>)
+    data class Recipes(
+        val version: Int,
+        val recipes: List<CraftingDataEntry>,
+        val potionMixes: List<PotionMixDataEntry>,
+        val containerMixes: List<ContainerMixDataEntry>
+    )
 
     data class CraftingDataEntry(
         val id: String?,
@@ -281,14 +349,44 @@ class RecipeUtil {
         val template: Any?,
         val result: Any?,
         val width: Int?,
-        val height: Int?
+        val height: Int?,
+        val requirement: RecipeRequirement?,
+        val assumeSymetry: Boolean?
     )
 
-    data class PotionMixDataEntry(val inputId: String, val inputMeta: Int, val reagentId: String, val reagentMeta: Int, val outputId: String, val outputMeta: Int)
+    data class PotionMixDataEntry(
+        val inputId: String,
+        val inputMeta: Int,
+        val reagentId: String,
+        val reagentMeta: Int,
+        val outputId: String,
+        val outputMeta: Int
+    )
 
     data class ContainerMixDataEntry(val inputId: String, val reagentId: String, val outputId: String)
 
-    data class RecipeItem(val id: String, val count: Int?, val damage: Int?, @SerializedName("nbt_b64") val nbtBase64: String?)
+    data class RecipeItem(
+        val id: String,
+        val count: Int?,
+        val damage: Int?,
+        val blockHash: Int?,
+        @SerializedName("nbt_b64") val nbtBase64: String?
+    )
 
-    data class RecipeItemDescriptor(val type: String, val count: Int, val name: String?, val itemId: String?, val auxValue: Int?, val fullName: String?, val itemTag: String?, val tagExpression: String?, val molangVersion: Int?)
+    data class RecipeItemDescriptor(
+        val type: String,
+        val count: Int,
+        val name: String?,
+        val itemId: String?,
+        val auxValue: Int?,
+        val fullName: String?,
+        val itemTag: String?,
+        val tagExpression: String?,
+        val molangVersion: Int?
+    )
+
+    data class RecipeRequirement(
+        val context: RecipeUnlockingRequirement.UnlockingContext,
+        val items: List<RecipeItemDescriptor>,
+    )
 }
